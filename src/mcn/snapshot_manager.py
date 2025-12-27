@@ -268,4 +268,101 @@ class SnapshotManager:
         """Get count of active builds (status == 'building')."""
         with self._build_lock:
             return len([b for b in self.active_builds.values() if b.get("status") == "building"])
+    
+    def save_snapshot(self, snapshot: MCNLayer, snapshot_id: str = "latest") -> bool:
+        """
+        Save snapshot to persistent storage.
+        
+        Args:
+            snapshot: MCNLayer snapshot to save
+            snapshot_id: Identifier for this snapshot (default: "latest")
+            
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        if not self.storage_path:
+            return False
+        
+        try:
+            # Ensure storage directory exists
+            os.makedirs(self.storage_path, exist_ok=True)
+            
+            # Save snapshot state
+            snapshot_file = os.path.join(self.storage_path, f"snapshot_{snapshot_id}.pkl")
+            
+            # Prepare state for saving
+            state = {
+                "dim": snapshot.dim,
+                "hot_buffer_size": snapshot.config.hot_buffer_size,
+                "hot_buffer_vectors": snapshot.hot_buffer_vectors,
+                "hot_buffer_meta": snapshot.hot_buffer_meta,
+                "child_store_vectors": snapshot.child_store.child_vectors,
+                "child_store_meta": snapshot.child_store.child_meta,
+                "child_store_orig_idx_to_pos": snapshot.child_store.orig_idx_to_pos,
+                "super_vectors": snapshot.super_vectors,
+                "cluster_offsets": snapshot.cluster_offsets,
+                "cluster_child_ids": snapshot.cluster_child_ids,
+                "index_finalized": snapshot._index_finalized,
+                "config": snapshot.config,
+            }
+            
+            # Save to disk
+            with open(snapshot_file, "wb") as f:
+                pickle.dump(state, f)
+            
+            print(f"Snapshot saved: {snapshot_file} ({snapshot.size()} vectors)")
+            return True
+            
+        except Exception as e:
+            print(f"Error saving snapshot: {e}")
+            return False
+    
+    def load_snapshot(self, snapshot_id: str = "latest") -> Optional[MCNLayer]:
+        """
+        Load snapshot from persistent storage.
+        
+        Args:
+            snapshot_id: Identifier for snapshot to load (default: "latest")
+            
+        Returns:
+            Loaded MCNLayer snapshot, or None if not found
+        """
+        if not self.storage_path:
+            return None
+        
+        try:
+            snapshot_file = os.path.join(self.storage_path, f"snapshot_{snapshot_id}.pkl")
+            
+            if not os.path.exists(snapshot_file):
+                print(f"Snapshot file not found: {snapshot_file}")
+                return None
+            
+            # Load state from disk
+            with open(snapshot_file, "rb") as f:
+                state = pickle.load(f)
+            
+            # Reconstruct MCNLayer
+            snapshot = MCNLayer(
+                dim=state["dim"],
+                hot_buffer_size=state["hot_buffer_size"],
+                **self.kwargs
+            )
+            
+            # Restore state
+            snapshot.hot_buffer_vectors = state["hot_buffer_vectors"]
+            snapshot.hot_buffer_meta = state["hot_buffer_meta"]
+            snapshot.child_store.child_vectors = state["child_store_vectors"]
+            snapshot.child_store.child_meta = state["child_store_meta"]
+            snapshot.child_store.orig_idx_to_pos = state["child_store_orig_idx_to_pos"]
+            snapshot.super_vectors = state["super_vectors"]
+            snapshot.cluster_offsets = state["cluster_offsets"]
+            snapshot.cluster_child_ids = state["cluster_child_ids"]
+            snapshot._index_finalized = state["index_finalized"]
+            
+            print(f"Snapshot loaded: {snapshot_file} ({snapshot.size()} vectors)")
+            return snapshot
+            
+        except Exception as e:
+            print(f"Error loading snapshot: {e}")
+            return None
 
