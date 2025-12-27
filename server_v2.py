@@ -28,16 +28,6 @@ import httpx
 
 from mcn import SnapshotManager
 
-# Stripe import (optional, only if keys are set)
-try:
-    import stripe
-    if STRIPE_SECRET_KEY:
-        stripe.api_key = STRIPE_SECRET_KEY
-    STRIPE_AVAILABLE = bool(STRIPE_SECRET_KEY)
-except ImportError:
-    STRIPE_AVAILABLE = False
-    logger.warning("Stripe not installed. Install with: pip install stripe")
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
