@@ -59,8 +59,12 @@ SCALE_THRESHOLD_TENANTS = 10
 SCALE_THRESHOLD_VECTORS = 2_000_000
 SCALE_THRESHOLD_P95_MS = 60
 
-# Admin API Key
+# Admin API Key (optional, for API access)
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
+
+# Hardcoded Admin Credentials (for web UI)
+ADMIN_EMAIL = "patelhetul803@gmail.com"
+ADMIN_PASSWORD = "Hetul7698676686"
 
 # Stripe Configuration
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
@@ -339,13 +343,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 # Admin Authentication
 # ============================================================================
 
-def verify_admin(admin_key: Optional[str] = Header(None, alias="X-Admin-Key")):
-    """Verify admin API key."""
-    if not ADMIN_API_KEY:
-        raise HTTPException(status_code=503, detail="Admin API not configured")
-    if admin_key != ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid admin key")
-    return admin_key
+def verify_admin(
+    admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    session_token: Optional[str] = Header(None, alias="X-Admin-Session")
+):
+    """Verify admin access via API key or session token."""
+    # Check session token first (for web UI)
+    if session_token:
+        with admin_session_lock:
+            expiry = admin_sessions.get(session_token, 0)
+            if expiry > time.time():
+                return session_token  # Valid session
+            else:
+                # Clean up expired session
+                admin_sessions.pop(session_token, None)
+    
+    # Fall back to API key (for direct API access)
+    if admin_key and ADMIN_API_KEY and admin_key == ADMIN_API_KEY:
+        return admin_key
+    
+    # No valid authentication
+    raise HTTPException(status_code=403, detail="Admin authentication required")
 
 
 # ============================================================================
@@ -788,14 +806,165 @@ async def health_check():
 
 
 # ============================================================================
+# Admin Authentication Endpoints
+# ============================================================================
+
+class AdminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/admin/login")
+async def admin_login(request: AdminLoginRequest):
+    """
+    Admin login endpoint (hardcoded credentials).
+    Returns session token for admin access.
+    """
+    if request.email == ADMIN_EMAIL and request.password == ADMIN_PASSWORD:
+        # Generate session token
+        import secrets
+        session_token = secrets.token_urlsafe(32)
+        expiry_time = time.time() + (24 * 60 * 60)  # 24 hours
+        
+        with admin_session_lock:
+            admin_sessions[session_token] = expiry_time
+        
+        logger.info(f"Admin login successful: {request.email}")
+        
+        return {
+            "status": "success",
+            "session_token": session_token,
+            "expires_in": 86400  # 24 hours in seconds
+        }
+    else:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+
+@app.post("/admin/logout")
+async def admin_logout(session_token: Optional[str] = Header(None, alias="X-Admin-Session")):
+    """
+    Admin logout endpoint.
+    """
+    if session_token:
+        with admin_session_lock:
+            admin_sessions.pop(session_token, None)
+        logger.info("Admin logout successful")
+    
+    return {"status": "success", "message": "Logged out"}
+
+
+@app.get("/admin/verify")
+async def verify_admin_session(session_token: Optional[str] = Header(None, alias="X-Admin-Session")):
+    """
+    Verify admin session is valid.
+    """
+    if session_token:
+        with admin_session_lock:
+            expiry = admin_sessions.get(session_token, 0)
+            if expiry > time.time():
+                return {
+                    "status": "valid",
+                    "expires_at": expiry,
+                    "email": ADMIN_EMAIL
+                }
+    
+    raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+
+# ============================================================================
 # Admin Endpoints
 # ============================================================================
 
+@app.get("/admin/stats")
+async def get_admin_stats(session_token: Optional[str] = Header(None, alias="X-Admin-Session")):
+    """
+    Get admin statistics (tenant counts, vectors, QPS, etc.).
+    Requires admin authentication.
+    """
+    # Verify admin access
+    verify_admin(session_token=session_token)
+    
+    with tenant_lock:
+        # Calculate stats by plan
+        plan_stats = {}
+        total_vectors = 0
+        total_tenants = 0
+        total_qps = 0
+        
+        for tenant_id, stats in tenant_stats.items():
+            if stats.get("vectors_stored", 0) > 0:  # Only count active tenants
+                total_tenants += 1
+                plan = stats.get("plan", "free")
+                vectors = stats.get("vectors_stored", 0)
+                total_vectors += vectors
+                
+                if plan not in plan_stats:
+                    plan_stats[plan] = {
+                        "user_count": 0,
+                        "total_vectors": 0,
+                        "total_qps": 0
+                    }
+                
+                plan_stats[plan]["user_count"] += 1
+                plan_stats[plan]["total_vectors"] += vectors
+                plan_stats[plan]["total_qps"] += stats.get("query_count", 0)
+                total_qps += stats.get("query_count", 0)
+        
+        # Calculate global QPS (from history)
+        now = time.time()
+        recent_qps = [t for t in qps_history if now - t <= 60]
+        current_qps = len(recent_qps) / 60.0 if recent_qps else 0.0
+        
+        # Calculate latency percentiles
+        if len(latency_history) > 0:
+            sorted_latencies = sorted(latency_history)
+            p50_idx = int(len(sorted_latencies) * 0.50)
+            p95_idx = int(len(sorted_latencies) * 0.95)
+            p99_idx = int(len(sorted_latencies) * 0.99)
+            p50_ms = sorted_latencies[p50_idx] * 1000
+            p95_ms = sorted_latencies[p95_idx] * 1000
+            p99_ms = sorted_latencies[p99_idx] * 1000
+        else:
+            p50_ms = p95_ms = p99_ms = 0.0
+    
+    return {
+        "status": "success",
+        "global": {
+            "total_tenants": total_tenants,
+            "max_tenants": MAX_TENANTS,
+            "total_vectors": total_vectors,
+            "current_qps": current_qps,
+            "p50_latency_ms": p50_ms,
+            "p95_latency_ms": p95_ms,
+            "p99_latency_ms": p99_ms
+        },
+        "plan_stats": plan_stats,
+        "tenants": [
+            {
+                "tenant_id": tid,
+                "plan": stats.get("plan", "free"),
+                "vectors_stored": stats.get("vectors_stored", 0),
+                "qps": stats.get("query_count", 0),
+                "pod_url": tenant_pods.get(tid, "local")
+            }
+            for tid, stats in tenant_stats.items()
+            if stats.get("vectors_stored", 0) > 0
+        ]
+    }
+
+
 @app.post("/admin/tenants/{tenant_id}/assign_pod")
-async def assign_pod(tenant_id: str, pod_url: str, admin_key: str = Depends(verify_admin)):
+async def assign_pod(
+    tenant_id: str,
+    pod_url: str,
+    session_token: Optional[str] = Header(None, alias="X-Admin-Session")
+):
     """
     Assign tenant to a pod (admin-only).
     """
+    # Verify admin access
+    verify_admin(session_token=session_token)
+    
     with pod_lock:
         tenant_pods[tenant_id] = pod_url
     
@@ -807,7 +976,7 @@ async def assign_pod(tenant_id: str, pod_url: str, admin_key: str = Depends(veri
 
 
 @app.get("/admin/tenants")
-async def list_tenants(admin_key: str = Depends(verify_admin)):
+async def list_tenants(session_token: Optional[str] = Header(None, alias="X-Admin-Session")):
     """
     List all tenants with their pod assignments (admin-only).
     """
@@ -831,10 +1000,13 @@ async def list_tenants(admin_key: str = Depends(verify_admin)):
 
 
 @app.get("/admin/tenants/{tenant_id}/pod")
-async def get_tenant_pod(tenant_id: str, admin_key: str = Depends(verify_admin)):
+async def get_tenant_pod(tenant_id: str, session_token: Optional[str] = Header(None, alias="X-Admin-Session")):
     """
     Get pod URL for a tenant (admin-only).
     """
+    # Verify admin access
+    verify_admin(session_token=session_token)
+    
     with pod_lock:
         pod_url = tenant_pods.get(tenant_id, "local")
     
@@ -849,12 +1021,15 @@ async def get_tenant_pod(tenant_id: str, admin_key: str = Depends(verify_admin))
 async def update_tenant_pod(
     tenant_id: str,
     request: Request,
-    admin_key: str = Depends(verify_admin)
+    session_token: Optional[str] = Header(None, alias="X-Admin-Session")
 ):
     """
     Update pod URL for a tenant (admin-only).
     Useful for moving tenants to different Railway instances.
     """
+    # Verify admin access
+    verify_admin(session_token=session_token)
+    
     try:
         data = await request.json()
         pod_url = data.get("pod_url")
@@ -1063,6 +1238,9 @@ async def root():
             "GET /finalize/status": "Get build status",
             "GET /metrics": "Get metrics (global or per-tenant)",
             "GET /health": "Health check",
+            "POST /admin/login": "Admin login (email/password)",
+            "POST /admin/logout": "Admin logout",
+            "GET /admin/verify": "Verify admin session",
             "POST /admin/tenants/{id}/assign_pod": "Assign pod (admin-only)",
             "GET /admin/tenants": "List tenants (admin-only)",
             "GET /admin/tenants/{id}/pod": "Get tenant pod URL (admin-only)",
