@@ -64,6 +64,10 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
+# Storage Configuration
+STORAGE_PATH = os.getenv("STORAGE_PATH", "/data")  # Railway volume mount point
+ENABLE_PERSISTENCE = os.getenv("ENABLE_PERSISTENCE", "true").lower() == "true"
+
 # Stripe import (optional, only if keys are set)
 try:
     import stripe
