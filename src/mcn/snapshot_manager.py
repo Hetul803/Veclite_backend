@@ -11,6 +11,8 @@ import numpy as np
 import threading
 import time
 import uuid
+import os
+import pickle
 from typing import Optional, Tuple, List, Dict, Any
 from .mcn_layer import MCNLayer
 
@@ -22,10 +24,11 @@ class SnapshotManager:
     Thread-safe: searches use active_snapshot (read-only), writes go to write_buffer.
     """
     
-    def __init__(self, dim: int, hot_buffer_size: int = 50, **kwargs):
+    def __init__(self, dim: int, hot_buffer_size: int = 50, storage_path: Optional[str] = None, **kwargs):
         self.dim = dim
         self.hot_buffer_size = hot_buffer_size
         self.kwargs = kwargs
+        self.storage_path = storage_path  # Path to persistent storage (Railway volume)
         
         # Active snapshot: read-only for searches
         self.active_snapshot: Optional[MCNLayer] = MCNLayer(
@@ -213,6 +216,13 @@ class SnapshotManager:
             # Keep build_info for history, but mark as swapped
             build_info["status"] = "swapped"
             build_info["swap_time"] = time.time()
+        
+        # Save new snapshot to persistent storage (if enabled)
+        if self.storage_path:
+            try:
+                self.save_snapshot(new_snapshot, snapshot_id="latest")
+            except Exception as e:
+                print(f"Warning: Failed to save snapshot to disk: {e}")
         
         return {
             "build_id": build_id,

@@ -376,21 +376,49 @@ async def lifespan(app: FastAPI):
     global snapshot_mgr
     
     # Startup: Initialize Snapshot Manager
-    logger.info("Initializing MCN v1 Snapshot Manager...")
+    logger.info("Initializing Memryx v1 Snapshot Manager...")
+    
+    # Determine storage path
+    storage_path = STORAGE_PATH if ENABLE_PERSISTENCE else None
+    if storage_path:
+        os.makedirs(storage_path, exist_ok=True)
+        logger.info(f"Persistence enabled: storage_path={storage_path}")
+    else:
+        logger.info("Persistence disabled (vectors will be lost on restart)")
+    
     snapshot_mgr = SnapshotManager(
         dim=DIM,
-        hot_buffer_size=HOT_BUFFER_SIZE
+        hot_buffer_size=HOT_BUFFER_SIZE,
+        storage_path=storage_path
     )
     
-    logger.info(f"MCN v1 initialized: dim={DIM}, hot_buffer_size={HOT_BUFFER_SIZE}")
+    # Try to load existing snapshot from disk
+    if storage_path and ENABLE_PERSISTENCE:
+        logger.info("Attempting to load existing snapshot from disk...")
+        loaded_snapshot = snapshot_mgr.load_snapshot(snapshot_id="latest")
+        if loaded_snapshot:
+            logger.info(f"Loaded snapshot: {loaded_snapshot.size()} vectors")
+            snapshot_mgr.active_snapshot = loaded_snapshot
+        else:
+            logger.info("No existing snapshot found, starting fresh")
+    
+    logger.info(f"Snapshot Manager initialized: dim={DIM}, hot_buffer_size={HOT_BUFFER_SIZE}")
     logger.info(f"Configuration: MAX_TENANTS={MAX_TENANTS}, WORKERS_RECOMMENDED={WORKERS_RECOMMENDED}")
     
     yield
     
-    # Shutdown: Cleanup
-    logger.info("Shutting down MCN...")
-    # Snapshot manager doesn't need explicit cleanup (Python GC handles it)
-    logger.info("MCN shutdown complete")
+    # Shutdown: Save current snapshot
+    logger.info("Shutting down Memryx...")
+    if snapshot_mgr and storage_path and ENABLE_PERSISTENCE:
+        try:
+            if snapshot_mgr.active_snapshot:
+                snapshot_mgr.save_snapshot(snapshot_mgr.active_snapshot, snapshot_id="latest")
+                logger.info("Snapshot saved to disk")
+        except Exception as e:
+            logger.error(f"Warning: Failed to save snapshot during shutdown: {e}")
+    
+    snapshot_mgr = None
+    logger.info("Shutdown complete")
 
 
 # ============================================================================
