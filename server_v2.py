@@ -1181,8 +1181,11 @@ async def create_checkout_session(request: Request):
         }
         
         price_id = plan_price_map.get(plan_id)
-        if not price_id:
-            raise HTTPException(status_code=400, detail=f"Invalid plan: {plan_id}")
+        if not price_id or price_id == "":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid plan: {plan_id} or Stripe price ID not configured. Please set STRIPE_PRICE_{plan_id.upper()} environment variable."
+            )
         
         try:
             session = stripe.checkout.Session.create(
@@ -1200,7 +1203,8 @@ async def create_checkout_session(request: Request):
                 }
             )
             
-            return {"sessionId": session.id}
+            # Return both sessionId and URL for compatibility
+            return {"sessionId": session.id, "url": session.url}
         except stripe.error.StripeError as e:
             logger.error(f"Stripe error: {e}")
             raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
