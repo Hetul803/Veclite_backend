@@ -720,10 +720,10 @@ async def search_vectors(
 
 @app.post("/finalize")
 async def finalize_index(
-    request: Optional[FinalizeRequest] = None,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None),
-    timeout_s: Optional[float] = Header(None, alias="X-Timeout-S")
+    timeout_s: Optional[float] = Header(None, alias="X-Timeout-S"),
+    request_body: Optional[FinalizeRequest] = Body(None)
 ):
     """
     Start building a new snapshot (non-blocking).
@@ -750,8 +750,8 @@ async def finalize_index(
             api_key = authorization[7:].strip()
         elif x_api_key:
             api_key = x_api_key
-        elif request and hasattr(request, 'api_key') and request.api_key:
-            api_key = request.api_key  # Backward compatibility: body api_key
+        elif request_body and hasattr(request_body, 'api_key') and request_body.api_key:
+            api_key = request_body.api_key  # Backward compatibility: body api_key
         else:
             raise HTTPException(
                 status_code=401,
@@ -762,8 +762,8 @@ async def finalize_index(
         final_timeout = 120.0
         if timeout_s is not None:
             final_timeout = float(timeout_s)
-        elif request and hasattr(request, 'timeout_s') and request.timeout_s:
-            final_timeout = request.timeout_s
+        elif request_body and hasattr(request_body, 'timeout_s') and request_body.timeout_s:
+            final_timeout = request_body.timeout_s
         
         # Start build (returns immediately with build_id)
         build_id = snapshot_mgr.start_build(timeout_s=final_timeout)
