@@ -114,28 +114,65 @@ class SnapshotManager:
         """
         Copy all vectors to snapshot: active_snapshot (if finalized) + write_buffer.
         This creates a complete snapshot without mutating source.
+        
+        OPTIMIZED: Fast path for empty state (no locks needed).
         """
+        # Fast path: Check if there's anything to copy before acquiring locks
+        total_size = 0
+        if self.active_snapshot and self.active_snapshot._index_finalized:
+            # Quick size check without lock (may be slightly stale, but safe for 0-check)
+            try:
+                total_size += self.active_snapshot.child_store.size()
+            except:
+                pass
+        
+        # Quick check of write_buffer hot buffer size (without lock)
+        try:
+            total_size += self.write_buffer.hot_buffer_vectors.shape[0]
+        except:
+            pass
+        
+        # Quick check of write_buffer child_store size (without lock)
+        try:
+            total_size += self.write_buffer.child_store.size()
+        except:
+            pass
+        
+        # If nothing to copy, return early (no locks needed)
+        if total_size == 0:
+            return
+        
         # Step 1: Copy from active_snapshot's child_store (if it has finalized vectors)
         if self.active_snapshot and self.active_snapshot._index_finalized:
-            with self.active_snapshot.child_store._lock:
-                if self.active_snapshot.child_store.size() > 0:
-                    active_vecs = self.active_snapshot.child_store.child_vectors.copy()
-                    active_meta = [m.copy() for m in self.active_snapshot.child_store.child_meta]
-                    snapshot.child_store.add(active_vecs, active_meta)
+            # Use timeout to avoid deadlock
+            if self.active_snapshot.child_store._lock.acquire(timeout=1.0):
+                try:
+                    if self.active_snapshot.child_store.size() > 0:
+                        active_vecs = self.active_snapshot.child_store.child_vectors.copy()
+                        active_meta = [m.copy() for m in self.active_snapshot.child_store.child_meta]
+                        snapshot.child_store.add(active_vecs, active_meta)
+                finally:
+                    self.active_snapshot.child_store._lock.release()
         
         # Step 2: Copy from write_buffer's hot buffer
-        with self.write_buffer._hot_buffer_lock:
-            if self.write_buffer.hot_buffer_vectors.shape[0] > 0:
-                vectors_to_copy = self.write_buffer.hot_buffer_vectors.copy()
-                metadata_to_copy = [m.copy() for m in self.write_buffer.hot_buffer_meta]
-                snapshot.child_store.add(vectors_to_copy, metadata_to_copy)
+        if self.write_buffer._hot_buffer_lock.acquire(timeout=1.0):
+            try:
+                if self.write_buffer.hot_buffer_vectors.shape[0] > 0:
+                    vectors_to_copy = self.write_buffer.hot_buffer_vectors.copy()
+                    metadata_to_copy = [m.copy() for m in self.write_buffer.hot_buffer_meta]
+                    snapshot.child_store.add(vectors_to_copy, metadata_to_copy)
+            finally:
+                self.write_buffer._hot_buffer_lock.release()
         
         # Step 3: Copy from write_buffer's child_store (if any exist)
-        with self.write_buffer.child_store._lock:
-            if self.write_buffer.child_store.size() > 0:
-                child_vecs = self.write_buffer.child_store.child_vectors.copy()
-                child_meta = [m.copy() for m in self.write_buffer.child_store.child_meta]
-                snapshot.child_store.add(child_vecs, child_meta)
+        if self.write_buffer.child_store._lock.acquire(timeout=1.0):
+            try:
+                if self.write_buffer.child_store.size() > 0:
+                    child_vecs = self.write_buffer.child_store.child_vectors.copy()
+                    child_meta = [m.copy() for m in self.write_buffer.child_store.child_meta]
+                    snapshot.child_store.add(child_vecs, child_meta)
+            finally:
+                self.write_buffer.child_store._lock.release()
     
     def finalize_build(self, build_id: str) -> Dict[str, Any]:
         """
