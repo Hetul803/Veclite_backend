@@ -237,12 +237,13 @@ def check_scaling_warnings():
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Token bucket rate limiter for per-tenant limits.
     
-    PRODUCTION FIX: Header-only middleware (no body consumption).
-    API key must be provided via headers to avoid ASGI body stream issues.
+    PRODUCTION FIX: Header-only middleware (NO body consumption).
+    CRITICAL: This middleware MUST NEVER read the request body to avoid breaking ASGI stream.
+    API key must be provided via headers only.
     """
     
     async def dispatch(self, request, call_next):
-        # Extract API key (tenant ID) from headers ONLY (no body consumption)
+        # Extract API key (tenant ID) from headers ONLY - NEVER read body
         api_key = None
         
         # Try Authorization: Bearer <key> (preferred)
@@ -260,13 +261,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         request.state.api_key = api_key
         
         # For POST endpoints, require API key in header (return 401 if missing)
+        # DO NOT fall back to reading body - that breaks ASGI stream
         if request.method == "POST" and not api_key:
             return JSONResponse(
                 status_code=401,
                 content={
                     "status": "error",
-                    "error": "missing_api_key_header",
-                    "message": "API key required in header. Use 'Authorization: Bearer <key>' or 'X-API-Key: <key>'"
+                    "error": "missing_api_key_header"
                 }
             )
         
@@ -498,6 +499,7 @@ async def add_vectors(
     - Header: X-API-Key: <key>
     - Body: api_key (backward compatibility, not recommended)
     """
+    print("HIT /add")
     global snapshot_mgr
     
     if snapshot_mgr is None:
@@ -633,6 +635,7 @@ async def search_vectors(
     - Header: X-API-Key: <key>
     - Body: api_key (backward compatibility, not recommended)
     """
+    print("HIT /search")
     global snapshot_mgr
     
     if snapshot_mgr is None:
@@ -732,8 +735,9 @@ async def finalize_index(
     - Header: X-API-Key: <key>
     - Body: api_key (backward compatibility, not recommended)
     
-    Request body is OPTIONAL - can be called with headers only.
+    Request body is OPTIONAL - can be called with headers only (empty body works).
     """
+    print("HIT /finalize")
     global snapshot_mgr
     
     if snapshot_mgr is None:
