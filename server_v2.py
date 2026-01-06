@@ -785,6 +785,8 @@ async def finalize_index(
         elif x_api_key:
             api_key = x_api_key
         
+        print(f"DEBUG: API key from header: {api_key[:20] if api_key else 'None'}...")
+        
         # Parse body manually if present (non-blocking, optional)
         # For /finalize, body is completely optional - we can work with headers only
         request_body = None
@@ -793,6 +795,7 @@ async def finalize_index(
         # Only read body if we DON'T have API key in header (backward compat)
         # If API key is in header, skip body entirely - use default timeout
         if not api_key:
+            print("DEBUG: No API key in header, reading body...")
             # Need to read body to get API key (backward compat)
             content_length = http_request.headers.get("content-length")
             if content_length and int(content_length) > 0:
@@ -808,9 +811,12 @@ async def finalize_index(
                         # Get timeout from body if provided
                         if body_data.get("timeout_s"):
                             final_timeout = float(body_data.get("timeout_s"))
-                except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception):
+                except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
+                    print(f"DEBUG: Body reading failed: {e}")
                     # Empty body, timeout, or invalid JSON is fine - we can work with headers only
                     pass
+        else:
+            print("DEBUG: API key in header, skipping body reading")
         
         # Get timeout from header (takes precedence)
         if timeout_s is not None:
@@ -818,14 +824,18 @@ async def finalize_index(
         elif request_body and hasattr(request_body, 'timeout_s') and request_body.timeout_s:
             final_timeout = request_body.timeout_s
         
+        print(f"DEBUG: Final timeout: {final_timeout}s")
+        
         if not api_key:
             raise HTTPException(
                 status_code=401,
                 detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
             )
         
+        print("DEBUG: Starting build...")
         # Start build (returns immediately with build_id)
         build_id = snapshot_mgr.start_build(timeout_s=final_timeout)
+        print(f"DEBUG: Build started with ID: {build_id}")
         
         # Finalize build in executor (non-blocking for API)
         def build_and_swap_sync():
