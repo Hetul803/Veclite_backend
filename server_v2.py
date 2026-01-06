@@ -633,7 +633,7 @@ async def add_vectors(
 
 @app.post("/search")
 async def search_vectors(
-    request: SearchRequest,
+    http_request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None)
 ):
@@ -661,9 +661,19 @@ async def search_vectors(
             api_key = authorization[7:].strip()
         elif x_api_key:
             api_key = x_api_key
-        elif hasattr(request, 'api_key') and request.api_key:
-            api_key = request.api_key  # Backward compatibility: body api_key
-        else:
+        
+        # Parse body manually (non-blocking approach)
+        try:
+            body_data = await http_request.json()
+            request = SearchRequest(**body_data)
+            # Fallback to body api_key if header not provided
+            if not api_key and body_data.get("api_key"):
+                api_key = body_data.get("api_key")
+        except (json.JSONDecodeError, ValueError, Exception) as e:
+            logger.warning(f"Body parsing failed: {e}, continuing with headers only")
+            request = None
+        
+        if not api_key:
             raise HTTPException(
                 status_code=401,
                 detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
@@ -672,6 +682,9 @@ async def search_vectors(
         user_id = api_key
         
         # Validate vector dimension
+        if not request or not request.vector:
+            raise HTTPException(status_code=400, detail="Invalid request: vector required")
+        
         if len(request.vector) != DIM:
             raise HTTPException(
                 status_code=400,
