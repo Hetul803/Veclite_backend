@@ -16,7 +16,7 @@ import logging
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from fastapi import FastAPI, HTTPException, Request, Depends, Header
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, Body
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
