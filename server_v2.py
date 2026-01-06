@@ -794,27 +794,30 @@ async def finalize_index(
             api_key = x_api_key
         
         # Parse body manually if present (non-blocking, optional)
+        # For /finalize, body is completely optional - we can work with headers only
         request_body = None
         final_timeout = 120.0  # Default timeout
         
-        # Check if body exists first to avoid blocking on empty requests
-        content_length = http_request.headers.get("content-length")
-        if content_length and int(content_length) > 0:
-            try:
-                # Use timeout to prevent hanging on malformed requests
-                body_bytes = await asyncio.wait_for(http_request.body(), timeout=2.0)
-                if body_bytes:
-                    body_data = json.loads(body_bytes)
-                    request_body = FinalizeRequest(**body_data) if body_data else None
-                    # Fallback to body api_key if header not provided
-                    if not api_key and body_data.get("api_key"):
-                        api_key = body_data.get("api_key")
-                    # Get timeout from body if provided
-                    if body_data.get("timeout_s"):
-                        final_timeout = float(body_data.get("timeout_s"))
-            except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception):
-                # Empty body, timeout, or invalid JSON is fine - we can work with headers only
-                pass
+        # Only read body if we need api_key from it (backward compat) or timeout_s
+        # If API key is in header, we can skip body entirely
+        if not api_key or timeout_s is None:
+            content_length = http_request.headers.get("content-length")
+            if content_length and int(content_length) > 0:
+                try:
+                    # Use timeout to prevent hanging on malformed requests
+                    body_bytes = await asyncio.wait_for(http_request.body(), timeout=2.0)
+                    if body_bytes:
+                        body_data = json.loads(body_bytes)
+                        request_body = FinalizeRequest(**body_data) if body_data else None
+                        # Fallback to body api_key if header not provided
+                        if not api_key and body_data.get("api_key"):
+                            api_key = body_data.get("api_key")
+                        # Get timeout from body if provided
+                        if body_data.get("timeout_s"):
+                            final_timeout = float(body_data.get("timeout_s"))
+                except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception):
+                    # Empty body, timeout, or invalid JSON is fine - we can work with headers only
+                    pass
         
         # Get timeout from header (takes precedence)
         if timeout_s is not None:
