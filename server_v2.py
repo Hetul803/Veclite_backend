@@ -244,16 +244,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Try header first (for future JWT support)
         if "X-Tenant-ID" in request.headers:
             api_key = request.headers["X-Tenant-ID"]
+        elif "X-API-Key" in request.headers:
+            api_key = request.headers["X-API-Key"]
         elif request.method == "POST":
+            # For POST requests, try to peek at body without consuming it
+            # We'll use a streaming approach that doesn't consume the stream
             try:
-                body = await request.body()
-                data = json.loads(body)
-                api_key = data.get("api_key") or data.get("tenant_id")
-                # Re-inject body for endpoint handlers
-                async def receive():
-                    return {"type": "http.request", "body": body}
-                request._receive = receive
-            except:
+                # Read body once and store in request.state for reuse
+                body_bytes = await request.body()
+                if body_bytes:
+                    data = json.loads(body_bytes)
+                    api_key = data.get("api_key") or data.get("tenant_id")
+                    # Store parsed data in request.state for endpoint handlers
+                    request.state.parsed_body = data
+                    request.state.body_bytes = body_bytes
+                    # Re-inject body properly for FastAPI/Pydantic
+                    async def receive():
+                        return {"type": "http.request", "body": body_bytes}
+                    request._receive = receive
+            except (json.JSONDecodeError, UnicodeDecodeError, Exception):
+                # If body parsing fails, continue without api_key (will be handled by endpoint)
                 pass
         
         if api_key:
@@ -542,11 +552,23 @@ async def add_vectors(request: AddRequest):
         vectors_array = np.array(vectors_list, dtype="float32")
         
         # Add to snapshot manager (write buffer)
+        # Use executor to avoid blocking event loop, but with timeout protection
         def add_vectors():
             snapshot_mgr.add(vectors_array, metadata_list)
         
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, add_vectors)
+        try:
+            loop = asyncio.get_event_loop()
+            # Add with timeout to prevent hanging (30 seconds max for add operation)
+            await asyncio.wait_for(
+                loop.run_in_executor(None, add_vectors),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Add operation timed out after 30s for {len(request.vectors)} vectors")
+            raise HTTPException(
+                status_code=504,
+                detail=f"Add operation timed out. Please try with fewer vectors or contact support."
+            )
         
         # Update tenant stats
         with tenant_lock:

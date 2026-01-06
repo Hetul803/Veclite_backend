@@ -117,13 +117,26 @@ class MCNLayer:
             if "original_idx" not in meta_batch[i]:
                 meta_batch[i]["original_idx"] = len(self.child_store.child_meta) + i
         
-        # Add to hot buffer
+        # Add to hot buffer (optimized: use concatenate instead of vstack for better performance)
         with self._hot_buffer_lock:
-            self.hot_buffer_vectors = np.vstack([self.hot_buffer_vectors, vecs])
+            # Use np.concatenate for better performance with large arrays
+            if self.hot_buffer_vectors.shape[0] == 0:
+                self.hot_buffer_vectors = vecs
+            else:
+                self.hot_buffer_vectors = np.concatenate([self.hot_buffer_vectors, vecs], axis=0)
             self.hot_buffer_meta.extend(meta_batch)
             
             # If hot buffer exceeds capacity, it will be compressed in finalize_index()
             hot_size = self.hot_buffer_vectors.shape[0]
+            
+            # Auto-flush warning: if hot buffer gets very large, log a warning
+            if hot_size > self.config.hot_buffer_size * 100:
+                import warnings
+                warnings.warn(
+                    f"Hot buffer size ({hot_size}) is {hot_size // self.config.hot_buffer_size}x larger than configured size ({self.config.hot_buffer_size}). "
+                    f"Consider calling finalize_index() to compress vectors.",
+                    UserWarning
+                )
         
         self._log("add", added=n, hot_buffer_size=hot_size)
     
