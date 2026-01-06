@@ -790,9 +790,10 @@ async def finalize_index(
         request_body = None
         final_timeout = 120.0  # Default timeout
         
-        # Only read body if we need api_key from it (backward compat) or timeout_s
-        # If API key is in header, we can skip body entirely
-        if not api_key or timeout_s is None:
+        # Only read body if we DON'T have API key in header (backward compat)
+        # If API key is in header, skip body entirely - use default timeout
+        if not api_key:
+            # Need to read body to get API key (backward compat)
             content_length = http_request.headers.get("content-length")
             if content_length and int(content_length) > 0:
                 try:
@@ -801,8 +802,8 @@ async def finalize_index(
                     if body_bytes:
                         body_data = json.loads(body_bytes)
                         request_body = FinalizeRequest(**body_data) if body_data else None
-                        # Fallback to body api_key if header not provided
-                        if not api_key and body_data.get("api_key"):
+                        # Get API key from body
+                        if body_data.get("api_key"):
                             api_key = body_data.get("api_key")
                         # Get timeout from body if provided
                         if body_data.get("timeout_s"):
