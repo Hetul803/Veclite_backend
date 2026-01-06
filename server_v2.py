@@ -833,8 +833,12 @@ async def finalize_index(
             )
         
         print("DEBUG: Starting build...")
-        # Start build (returns immediately with build_id)
-        build_id = snapshot_mgr.start_build(timeout_s=final_timeout)
+        # Start build in executor to avoid blocking event loop
+        # start_build() does synchronous work (copying vectors, creating MCNLayer)
+        loop = asyncio.get_event_loop()
+        build_id = await loop.run_in_executor(
+            None, snapshot_mgr.start_build, final_timeout
+        )
         print(f"DEBUG: Build started with ID: {build_id}")
         
         # Finalize build in executor (non-blocking for API)
