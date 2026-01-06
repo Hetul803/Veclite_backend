@@ -486,7 +486,7 @@ class HealthResponse(BaseModel):
 @app.post("/add")
 @app.post("/ingest")  # Alias for /add
 async def add_vectors(
-    request: AddRequest,
+    http_request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None)
 ):
@@ -512,9 +512,20 @@ async def add_vectors(
             api_key = authorization[7:].strip()
         elif x_api_key:
             api_key = x_api_key
-        elif hasattr(request, 'api_key') and request.api_key:
-            api_key = request.api_key  # Backward compatibility: body api_key
-        else:
+        
+        # Parse body manually (non-blocking approach)
+        try:
+            body_data = await http_request.json()
+            request = AddRequest(**body_data)
+            # Fallback to body api_key if header not provided
+            if not api_key and body_data.get("api_key"):
+                api_key = body_data.get("api_key")
+        except (json.JSONDecodeError, ValueError, Exception) as e:
+            # If body parsing fails, try to continue with headers only
+            logger.warning(f"Body parsing failed: {e}, continuing with headers only")
+            request = None
+        
+        if not api_key:
             raise HTTPException(
                 status_code=401,
                 detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
@@ -531,8 +542,8 @@ async def add_vectors(
             )
         
         # Validate vectors
-        if not request.vectors:
-            raise HTTPException(status_code=400, detail="Empty vectors list")
+        if not request or not request.vectors:
+            raise HTTPException(status_code=400, detail="Empty vectors list or invalid request")
         
         # Check tenant cap (on first vector for new tenant)
         with tenant_lock:
@@ -720,10 +731,10 @@ async def search_vectors(
 
 @app.post("/finalize")
 async def finalize_index(
+    http_request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None),
-    timeout_s: Optional[float] = Header(None, alias="X-Timeout-S"),
-    request_body: Optional[FinalizeRequest] = Body(None)
+    timeout_s: Optional[float] = Header(None, alias="X-Timeout-S")
 ):
     """
     Start building a new snapshot (non-blocking).
@@ -750,20 +761,38 @@ async def finalize_index(
             api_key = authorization[7:].strip()
         elif x_api_key:
             api_key = x_api_key
-        elif request_body and hasattr(request_body, 'api_key') and request_body.api_key:
-            api_key = request_body.api_key  # Backward compatibility: body api_key
-        else:
-            raise HTTPException(
-                status_code=401,
-                detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
-            )
         
-        # Get timeout from header or body (default: 120.0)
-        final_timeout = 120.0
+        # Parse body manually if present (non-blocking, optional)
+        request_body = None
+        final_timeout = 120.0  # Default timeout
+        
+        try:
+            # Try to read body, but don't block if it's empty or invalid
+            body_bytes = await http_request.body()
+            if body_bytes:
+                body_data = json.loads(body_bytes)
+                request_body = FinalizeRequest(**body_data) if body_data else None
+                # Fallback to body api_key if header not provided
+                if not api_key and body_data.get("api_key"):
+                    api_key = body_data.get("api_key")
+                # Get timeout from body if provided
+                if body_data.get("timeout_s"):
+                    final_timeout = float(body_data.get("timeout_s"))
+        except (json.JSONDecodeError, ValueError, Exception):
+            # Empty body or invalid JSON is fine - we can work with headers only
+            pass
+        
+        # Get timeout from header (takes precedence)
         if timeout_s is not None:
             final_timeout = float(timeout_s)
         elif request_body and hasattr(request_body, 'timeout_s') and request_body.timeout_s:
             final_timeout = request_body.timeout_s
+        
+        if not api_key:
+            raise HTTPException(
+                status_code=401,
+                detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
+            )
         
         # Start build (returns immediately with build_id)
         build_id = snapshot_mgr.start_build(timeout_s=final_timeout)
