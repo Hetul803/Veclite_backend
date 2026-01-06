@@ -514,16 +514,20 @@ async def add_vectors(
             api_key = x_api_key
         
         # Parse body manually (non-blocking approach)
-        try:
-            body_data = await http_request.json()
-            request = AddRequest(**body_data)
-            # Fallback to body api_key if header not provided
-            if not api_key and body_data.get("api_key"):
-                api_key = body_data.get("api_key")
-        except (json.JSONDecodeError, ValueError, Exception) as e:
-            # If body parsing fails, try to continue with headers only
-            logger.warning(f"Body parsing failed: {e}, continuing with headers only")
-            request = None
+        # Check if body exists first to avoid blocking on empty requests
+        request = None
+        content_length = http_request.headers.get("content-length")
+        if content_length and int(content_length) > 0:
+            try:
+                body_data = await http_request.json()
+                request = AddRequest(**body_data)
+                # Fallback to body api_key if header not provided
+                if not api_key and body_data.get("api_key"):
+                    api_key = body_data.get("api_key")
+            except (json.JSONDecodeError, ValueError, Exception) as e:
+                # If body parsing fails, try to continue with headers only
+                logger.warning(f"Body parsing failed: {e}, continuing with headers only")
+                request = None
         
         if not api_key:
             raise HTTPException(
@@ -663,15 +667,19 @@ async def search_vectors(
             api_key = x_api_key
         
         # Parse body manually (non-blocking approach)
-        try:
-            body_data = await http_request.json()
-            request = SearchRequest(**body_data)
-            # Fallback to body api_key if header not provided
-            if not api_key and body_data.get("api_key"):
-                api_key = body_data.get("api_key")
-        except (json.JSONDecodeError, ValueError, Exception) as e:
-            logger.warning(f"Body parsing failed: {e}, continuing with headers only")
-            request = None
+        # Check if body exists first to avoid blocking on empty requests
+        request = None
+        content_length = http_request.headers.get("content-length")
+        if content_length and int(content_length) > 0:
+            try:
+                body_data = await http_request.json()
+                request = SearchRequest(**body_data)
+                # Fallback to body api_key if header not provided
+                if not api_key and body_data.get("api_key"):
+                    api_key = body_data.get("api_key")
+            except (json.JSONDecodeError, ValueError, Exception) as e:
+                logger.warning(f"Body parsing failed: {e}, continuing with headers only")
+                request = None
         
         if not api_key:
             raise HTTPException(
@@ -779,21 +787,24 @@ async def finalize_index(
         request_body = None
         final_timeout = 120.0  # Default timeout
         
-        try:
-            # Try to read body, but don't block if it's empty or invalid
-            body_bytes = await http_request.body()
-            if body_bytes:
-                body_data = json.loads(body_bytes)
-                request_body = FinalizeRequest(**body_data) if body_data else None
-                # Fallback to body api_key if header not provided
-                if not api_key and body_data.get("api_key"):
-                    api_key = body_data.get("api_key")
-                # Get timeout from body if provided
-                if body_data.get("timeout_s"):
-                    final_timeout = float(body_data.get("timeout_s"))
-        except (json.JSONDecodeError, ValueError, Exception):
-            # Empty body or invalid JSON is fine - we can work with headers only
-            pass
+        # Check if body exists first to avoid blocking on empty requests
+        content_length = http_request.headers.get("content-length")
+        if content_length and int(content_length) > 0:
+            try:
+                # Try to read body, but don't block if it's empty or invalid
+                body_bytes = await http_request.body()
+                if body_bytes:
+                    body_data = json.loads(body_bytes)
+                    request_body = FinalizeRequest(**body_data) if body_data else None
+                    # Fallback to body api_key if header not provided
+                    if not api_key and body_data.get("api_key"):
+                        api_key = body_data.get("api_key")
+                    # Get timeout from body if provided
+                    if body_data.get("timeout_s"):
+                        final_timeout = float(body_data.get("timeout_s"))
+            except (json.JSONDecodeError, ValueError, Exception):
+                # Empty body or invalid JSON is fine - we can work with headers only
+                pass
         
         # Get timeout from header (takes precedence)
         if timeout_s is not None:
