@@ -235,36 +235,40 @@ def check_scaling_warnings():
 # ============================================================================
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Token bucket rate limiter for per-tenant limits."""
+    """Token bucket rate limiter for per-tenant limits.
+    
+    PRODUCTION FIX: Header-only middleware (no body consumption).
+    API key must be provided via headers to avoid ASGI body stream issues.
+    """
     
     async def dispatch(self, request, call_next):
-        # Extract API key (tenant ID) from header or body
+        # Extract API key (tenant ID) from headers ONLY (no body consumption)
         api_key = None
         
-        # Try header first (for future JWT support)
-        if "X-Tenant-ID" in request.headers:
-            api_key = request.headers["X-Tenant-ID"]
+        # Try Authorization: Bearer <key> (preferred)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:].strip()
+        # Try X-API-Key header
         elif "X-API-Key" in request.headers:
             api_key = request.headers["X-API-Key"]
-        elif request.method == "POST":
-            # For POST requests, try to peek at body without consuming it
-            # We'll use a streaming approach that doesn't consume the stream
-            try:
-                # Read body once and store in request.state for reuse
-                body_bytes = await request.body()
-                if body_bytes:
-                    data = json.loads(body_bytes)
-                    api_key = data.get("api_key") or data.get("tenant_id")
-                    # Store parsed data in request.state for endpoint handlers
-                    request.state.parsed_body = data
-                    request.state.body_bytes = body_bytes
-                    # Re-inject body properly for FastAPI/Pydantic
-                    async def receive():
-                        return {"type": "http.request", "body": body_bytes}
-                    request._receive = receive
-            except (json.JSONDecodeError, UnicodeDecodeError, Exception):
-                # If body parsing fails, continue without api_key (will be handled by endpoint)
-                pass
+        # Try X-Tenant-ID header (legacy support)
+        elif "X-Tenant-ID" in request.headers:
+            api_key = request.headers["X-Tenant-ID"]
+        
+        # Store API key in request.state for endpoints to use
+        request.state.api_key = api_key
+        
+        # For POST endpoints, require API key in header (return 401 if missing)
+        if request.method == "POST" and not api_key:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "status": "error",
+                    "error": "missing_api_key_header",
+                    "message": "API key required in header. Use 'Authorization: Bearer <key>' or 'X-API-Key: <key>'"
+                }
+            )
         
         if api_key:
             # Get tenant plan
@@ -451,19 +455,19 @@ class VectorItem(BaseModel):
 
 
 class AddRequest(BaseModel):
-    api_key: str
+    api_key: Optional[str] = None  # Optional for backward compat, but header preferred
     vectors: List[VectorItem]
 
 
 class SearchRequest(BaseModel):
-    api_key: str
+    api_key: Optional[str] = None  # Optional for backward compat, but header preferred
     vector: List[float] = Field(..., min_length=1)
     k: int = Field(default=5, ge=1, le=100)
 
 
 class FinalizeRequest(BaseModel):
-    api_key: str
-    timeout_s: float = Field(default=120.0, ge=1.0, le=3600.0)
+    api_key: Optional[str] = None  # Optional for backward compat, but header preferred
+    timeout_s: Optional[float] = Field(default=120.0, ge=1.0, le=3600.0)
 
 
 class HealthResponse(BaseModel):
@@ -480,10 +484,19 @@ class HealthResponse(BaseModel):
 
 @app.post("/add")
 @app.post("/ingest")  # Alias for /add
-async def add_vectors(request: AddRequest):
+async def add_vectors(
+    request: AddRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None)
+):
     """
     Ingest vectors with rate limiting and tenant limits.
     Tenant-scoped endpoint.
+    
+    API key can be provided via:
+    - Header: Authorization: Bearer <key> (preferred)
+    - Header: X-API-Key: <key>
+    - Body: api_key (backward compatibility, not recommended)
     """
     global snapshot_mgr
     
@@ -491,6 +504,22 @@ async def add_vectors(request: AddRequest):
         raise HTTPException(status_code=503, detail="MCN not initialized")
     
     try:
+        # Extract API key from header (preferred) or fallback to body (backward compat)
+        api_key = None
+        if authorization and authorization.startswith("Bearer "):
+            api_key = authorization[7:].strip()
+        elif x_api_key:
+            api_key = x_api_key
+        elif hasattr(request, 'api_key') and request.api_key:
+            api_key = request.api_key  # Backward compatibility: body api_key
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
+            )
+        
+        user_id = api_key
+        
         # Check RAM usage
         ram_percent = get_ram_usage_percent()
         if ram_percent > RAM_SAFETY_THRESHOLD:
@@ -502,9 +531,6 @@ async def add_vectors(request: AddRequest):
         # Validate vectors
         if not request.vectors:
             raise HTTPException(status_code=400, detail="Empty vectors list")
-        
-        # Extract user_id from api_key
-        user_id = request.api_key
         
         # Check tenant cap (on first vector for new tenant)
         with tenant_lock:
@@ -593,10 +619,19 @@ async def add_vectors(request: AddRequest):
 
 
 @app.post("/search")
-async def search_vectors(request: SearchRequest):
+async def search_vectors(
+    request: SearchRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None)
+):
     """
     Search vectors with rate limiting and security filtering.
     Uses active snapshot (read-only, never blocks).
+    
+    API key can be provided via:
+    - Header: Authorization: Bearer <key> (preferred)
+    - Header: X-API-Key: <key>
+    - Body: api_key (backward compatibility, not recommended)
     """
     global snapshot_mgr
     
@@ -606,15 +641,28 @@ async def search_vectors(request: SearchRequest):
     search_start = time.time()
     
     try:
+        # Extract API key from header (preferred) or fallback to body (backward compat)
+        api_key = None
+        if authorization and authorization.startswith("Bearer "):
+            api_key = authorization[7:].strip()
+        elif x_api_key:
+            api_key = x_api_key
+        elif hasattr(request, 'api_key') and request.api_key:
+            api_key = request.api_key  # Backward compatibility: body api_key
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
+            )
+        
+        user_id = api_key
+        
         # Validate vector dimension
         if len(request.vector) != DIM:
             raise HTTPException(
                 status_code=400,
                 detail=f"Vector dimension mismatch: expected {DIM}, got {len(request.vector)}"
             )
-        
-        # Extract user_id from api_key
-        user_id = request.api_key
         
         # Update tenant stats (concurrent search tracking)
         with tenant_lock:
@@ -668,11 +716,23 @@ async def search_vectors(request: SearchRequest):
 
 
 @app.post("/finalize")
-async def finalize_index(request: FinalizeRequest):
+async def finalize_index(
+    request: Optional[FinalizeRequest] = None,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None),
+    timeout_s: Optional[float] = Header(None, alias="X-Timeout-S")
+):
     """
     Start building a new snapshot (non-blocking).
     Returns build_id for status tracking.
     Tenant-scoped endpoint.
+    
+    API key can be provided via:
+    - Header: Authorization: Bearer <key> (preferred)
+    - Header: X-API-Key: <key>
+    - Body: api_key (backward compatibility, not recommended)
+    
+    Request body is OPTIONAL - can be called with headers only.
     """
     global snapshot_mgr
     
@@ -680,8 +740,29 @@ async def finalize_index(request: FinalizeRequest):
         raise HTTPException(status_code=503, detail="MCN not initialized")
     
     try:
+        # Extract API key from header (preferred) or fallback to body (backward compat)
+        api_key = None
+        if authorization and authorization.startswith("Bearer "):
+            api_key = authorization[7:].strip()
+        elif x_api_key:
+            api_key = x_api_key
+        elif request and hasattr(request, 'api_key') and request.api_key:
+            api_key = request.api_key  # Backward compatibility: body api_key
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
+            )
+        
+        # Get timeout from header or body (default: 120.0)
+        final_timeout = 120.0
+        if timeout_s is not None:
+            final_timeout = float(timeout_s)
+        elif request and hasattr(request, 'timeout_s') and request.timeout_s:
+            final_timeout = request.timeout_s
+        
         # Start build (returns immediately with build_id)
-        build_id = snapshot_mgr.start_build(timeout_s=request.timeout_s)
+        build_id = snapshot_mgr.start_build(timeout_s=final_timeout)
         
         # Finalize build in executor (non-blocking for API)
         def build_and_swap_sync():
