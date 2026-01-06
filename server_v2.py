@@ -519,13 +519,14 @@ async def add_vectors(
         content_length = http_request.headers.get("content-length")
         if content_length and int(content_length) > 0:
             try:
-                body_data = await http_request.json()
+                # Use timeout to prevent hanging on malformed requests
+                body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
                 request = AddRequest(**body_data)
                 # Fallback to body api_key if header not provided
                 if not api_key and body_data.get("api_key"):
                     api_key = body_data.get("api_key")
-            except (json.JSONDecodeError, ValueError, Exception) as e:
-                # If body parsing fails, try to continue with headers only
+            except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
+                # If body parsing fails or times out, try to continue with headers only
                 logger.warning(f"Body parsing failed: {e}, continuing with headers only")
                 request = None
         
@@ -672,12 +673,13 @@ async def search_vectors(
         content_length = http_request.headers.get("content-length")
         if content_length and int(content_length) > 0:
             try:
-                body_data = await http_request.json()
+                # Use timeout to prevent hanging on malformed requests
+                body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
                 request = SearchRequest(**body_data)
                 # Fallback to body api_key if header not provided
                 if not api_key and body_data.get("api_key"):
                     api_key = body_data.get("api_key")
-            except (json.JSONDecodeError, ValueError, Exception) as e:
+            except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
                 logger.warning(f"Body parsing failed: {e}, continuing with headers only")
                 request = None
         
@@ -791,8 +793,8 @@ async def finalize_index(
         content_length = http_request.headers.get("content-length")
         if content_length and int(content_length) > 0:
             try:
-                # Try to read body, but don't block if it's empty or invalid
-                body_bytes = await http_request.body()
+                # Use timeout to prevent hanging on malformed requests
+                body_bytes = await asyncio.wait_for(http_request.body(), timeout=2.0)
                 if body_bytes:
                     body_data = json.loads(body_bytes)
                     request_body = FinalizeRequest(**body_data) if body_data else None
@@ -802,8 +804,8 @@ async def finalize_index(
                     # Get timeout from body if provided
                     if body_data.get("timeout_s"):
                         final_timeout = float(body_data.get("timeout_s"))
-            except (json.JSONDecodeError, ValueError, Exception):
-                # Empty body or invalid JSON is fine - we can work with headers only
+            except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception):
+                # Empty body, timeout, or invalid JSON is fine - we can work with headers only
                 pass
         
         # Get timeout from header (takes precedence)
