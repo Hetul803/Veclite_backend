@@ -514,29 +514,21 @@ async def add_vectors(
             api_key = x_api_key
         
         # Parse body manually (non-blocking approach)
-        # Only read body if we need it (API key in header means we can skip body for auth)
+        # CRITICAL: Read body ONCE - ASGI body stream can only be read once!
         request = None
-        if not api_key:
-            # No API key in header, try to get it from body (backward compat)
-            content_length = http_request.headers.get("content-length")
-            if content_length and int(content_length) > 0:
-                try:
-                    body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
-                    if body_data.get("api_key"):
-                        api_key = body_data.get("api_key")
-                except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
-                    logger.warning(f"Body parsing failed while reading api_key: {e}")
-        
-        # Now read body for actual request data (only if we have API key)
-        if api_key:
-            content_length = http_request.headers.get("content-length")
-            if content_length and int(content_length) > 0:
-                try:
-                    body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
-                    request = AddRequest(**body_data)
-                except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
-                    logger.warning(f"Body parsing failed: {e}, continuing with headers only")
-                    request = None
+        content_length = http_request.headers.get("content-length")
+        if content_length and int(content_length) > 0:
+            try:
+                # Read body once with timeout
+                body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
+                # Extract API key from body if not in header (backward compat)
+                if not api_key and body_data.get("api_key"):
+                    api_key = body_data.get("api_key")
+                # Parse request from body
+                request = AddRequest(**body_data)
+            except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
+                logger.warning(f"Body parsing failed: {e}, continuing with headers only")
+                request = None
         
         if not api_key:
             raise HTTPException(
