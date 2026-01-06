@@ -835,11 +835,21 @@ async def finalize_index(
         print("DEBUG: Starting build...")
         # Start build in executor to avoid blocking event loop
         # start_build() does synchronous work (copying vectors, creating MCNLayer)
-        loop = asyncio.get_event_loop()
-        build_id = await loop.run_in_executor(
-            None, snapshot_mgr.start_build, final_timeout
-        )
-        print(f"DEBUG: Build started with ID: {build_id}")
+        # Even with 0 vectors, it acquires locks which could block
+        try:
+            loop = asyncio.get_event_loop()
+            print("DEBUG: About to call run_in_executor...")
+            build_id = await asyncio.wait_for(
+                loop.run_in_executor(None, snapshot_mgr.start_build, final_timeout),
+                timeout=5.0  # 5 second timeout for start_build itself
+            )
+            print(f"DEBUG: Build started with ID: {build_id}")
+        except asyncio.TimeoutError:
+            print("DEBUG: start_build timed out after 5s!")
+            raise HTTPException(
+                status_code=504,
+                detail="Build initialization timed out. Please try again."
+            )
         
         # Finalize build in executor (non-blocking for API)
         def build_and_swap_sync():
