@@ -880,6 +880,20 @@ async def finalize_index(
             )
         
         print("DEBUG: Starting build...")
+        # Check if build is already in progress (quick check without lock)
+        # This prevents timeout if we can detect it early
+        try:
+            # Quick check: if new_snapshot exists, build is in progress
+            if snapshot_mgr.new_snapshot is not None:
+                print("DEBUG: Build already in progress, returning 409")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Build already in progress. Use /finalize/status to check progress."
+                )
+        except AttributeError:
+            # If snapshot_mgr doesn't have new_snapshot attribute, continue
+            pass
+        
         # Start build in executor to avoid blocking event loop
         # start_build() does synchronous work (copying vectors, creating MCNLayer)
         # Even with 0 vectors, it acquires locks which could block
@@ -888,15 +902,24 @@ async def finalize_index(
             print("DEBUG: About to call run_in_executor...")
             build_id = await asyncio.wait_for(
                 loop.run_in_executor(None, snapshot_mgr.start_build, final_timeout),
-                timeout=5.0  # 5 second timeout for start_build itself
+                timeout=3.0  # Reduced to 3 seconds since we check early
             )
             print(f"DEBUG: Build started with ID: {build_id}")
         except asyncio.TimeoutError:
-            print("DEBUG: start_build timed out after 5s!")
+            print("DEBUG: start_build timed out after 3s!")
             raise HTTPException(
                 status_code=504,
-                detail="Build initialization timed out. Please try again."
+                detail="Build initialization timed out. Another build may be in progress. Please try again in a few seconds."
             )
+        except RuntimeError as e:
+            # Catch "Build already in progress" or lock timeout errors
+            if "already in progress" in str(e) or "Could not acquire build lock" in str(e):
+                print(f"DEBUG: Build conflict detected: {e}")
+                raise HTTPException(
+                    status_code=409,
+                    detail=str(e)
+                )
+            raise
         
         # Finalize build in executor (non-blocking for API)
         def build_and_swap_sync():
