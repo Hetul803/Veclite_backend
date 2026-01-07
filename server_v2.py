@@ -572,19 +572,25 @@ async def add_vectors(
                 detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
             )
         
+        print("DEBUG: API key validated, setting user_id...")
         user_id = api_key
         
+        print("DEBUG: About to check RAM usage...")
         # Check RAM usage
         ram_percent = get_ram_usage_percent()
+        print(f"DEBUG: RAM usage: {ram_percent:.1f}%")
         if ram_percent > RAM_SAFETY_THRESHOLD:
             raise HTTPException(
                 status_code=503,
                 detail=f"RAM usage {ram_percent:.1f}% exceeds threshold {RAM_SAFETY_THRESHOLD}%"
             )
         
+        print("DEBUG: RAM check passed, validating vectors...")
         # Validate vectors
         if not request or not request.vectors:
             raise HTTPException(status_code=400, detail="Empty vectors list or invalid request")
+        
+        print(f"DEBUG: Vectors validated, count: {len(request.vectors)}")
         
         # Check tenant cap (on first vector for new tenant)
         with tenant_lock:
