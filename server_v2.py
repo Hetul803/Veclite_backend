@@ -535,7 +535,14 @@ async def add_vectors(
                     print("DEBUG: About to create AddRequest object...")
                     request = AddRequest(**body_data)
                     print("DEBUG: AddRequest object created")
-                    print(f"DEBUG: Request parsed, vectors count: {len(request.vectors) if request.vectors else 0}")
+                    # Access vectors safely to avoid any potential blocking
+                    try:
+                        vec_count = len(request.vectors) if request.vectors else 0
+                        print(f"DEBUG: Request parsed, vectors count: {vec_count}")
+                    except Exception as vec_err:
+                        print(f"DEBUG: Error accessing vectors: {vec_err}")
+                        vec_count = 0
+                    print("DEBUG: Exiting try block, about to continue...")
                 except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
                     print(f"DEBUG: Body parsing failed: {e}")
                     logger.warning(f"Body parsing failed: {e}")
