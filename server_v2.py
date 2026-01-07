@@ -532,7 +532,9 @@ async def add_vectors(
                     body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
                     print(f"DEBUG: Body read successfully, keys: {list(body_data.keys())}")
                     # Parse request from body
+                    print("DEBUG: About to create AddRequest object...")
                     request = AddRequest(**body_data)
+                    print("DEBUG: AddRequest object created")
                     print(f"DEBUG: Request parsed, vectors count: {len(request.vectors) if request.vectors else 0}")
                 except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
                     print(f"DEBUG: Body parsing failed: {e}")
@@ -556,6 +558,7 @@ async def add_vectors(
                     logger.warning(f"Body parsing failed: {e}")
                     request = None
         
+        print("DEBUG: About to validate API key...")
         if not api_key:
             raise HTTPException(
                 status_code=401,
