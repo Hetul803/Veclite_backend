@@ -566,14 +566,17 @@ async def add_vectors(
                     request = None
         
         print("DEBUG: About to validate API key...")
+        print(f"DEBUG: api_key value: {api_key[:30] if api_key else 'None'}...")
         if not api_key:
+            print("DEBUG: api_key is None or empty, raising 401...")
             raise HTTPException(
                 status_code=401,
                 detail="API key required in header (Authorization: Bearer <key> or X-API-Key: <key>)"
             )
         
-        print("DEBUG: API key validated, setting user_id...")
+        print("DEBUG: API key check passed, setting user_id...")
         user_id = api_key
+        print(f"DEBUG: user_id set: {user_id[:30]}...")
         
         print("DEBUG: About to check RAM usage...")
         # Check RAM usage
