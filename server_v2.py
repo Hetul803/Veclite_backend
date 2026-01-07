@@ -8,7 +8,7 @@ import time
 import json
 from pathlib import Path
 from collections import defaultdict, deque
-from threading import Lock
+from threading import Lock, RLock
 from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, asdict
 import logging
@@ -150,7 +150,9 @@ latency_history: deque = deque(maxlen=1000)  # Last 1000 search latencies
 qps_history: deque = deque(maxlen=60)  # Last 60 seconds of QPS
 
 # Thread locks
-tenant_lock = Lock()
+# Use RLock (reentrant) to allow same thread to acquire lock multiple times
+# This prevents deadlock when middleware and endpoint both need the lock
+tenant_lock = RLock()
 pod_lock = Lock()
 
 # ============================================================================
