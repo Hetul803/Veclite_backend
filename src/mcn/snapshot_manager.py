@@ -113,6 +113,9 @@ class SnapshotManager:
                 "snapshot": self.new_snapshot,
                 "timeout_s": timeout_s
             }
+        finally:
+            if lock_acquired:
+                self._build_lock.release()
         
         return build_id
     
