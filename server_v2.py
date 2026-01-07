@@ -506,6 +506,7 @@ async def add_vectors(
         raise HTTPException(status_code=503, detail="MCN not initialized")
     
     try:
+        print("DEBUG: Extracting API key from headers...")
         # Extract API key from header (preferred) or fallback to body (backward compat)
         api_key = None
         if authorization and authorization.startswith("Bearer "):
@@ -513,23 +514,34 @@ async def add_vectors(
         elif x_api_key:
             api_key = x_api_key
         
+        print(f"DEBUG: API key from header: {api_key[:20] if api_key else 'None'}...")
+        
         # Parse body manually (non-blocking approach)
         # CRITICAL: Read body ONCE - ASGI body stream can only be read once!
         # For /add, we MUST read body to get vectors, but only if API key is in header
         request = None
         if api_key:
+            print("DEBUG: API key in header, reading body for vectors...")
             # API key in header - safe to read body for vectors
             content_length = http_request.headers.get("content-length")
+            print(f"DEBUG: Content-Length: {content_length}")
             if content_length and int(content_length) > 0:
                 try:
+                    print("DEBUG: About to read body with timeout...")
                     # Read body once with timeout
                     body_data = await asyncio.wait_for(http_request.json(), timeout=2.0)
+                    print(f"DEBUG: Body read successfully, keys: {list(body_data.keys())}")
                     # Parse request from body
                     request = AddRequest(**body_data)
+                    print(f"DEBUG: Request parsed, vectors count: {len(request.vectors) if request.vectors else 0}")
                 except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, Exception) as e:
+                    print(f"DEBUG: Body parsing failed: {e}")
                     logger.warning(f"Body parsing failed: {e}")
                     request = None
+            else:
+                print("DEBUG: No content-length or empty, skipping body read")
         else:
+            print("DEBUG: No API key in header, reading body for API key...")
             # No API key in header - try to get it from body (backward compat)
             content_length = http_request.headers.get("content-length")
             if content_length and int(content_length) > 0:
