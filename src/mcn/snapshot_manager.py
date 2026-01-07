@@ -86,7 +86,13 @@ class SnapshotManager:
         """
         build_id = str(uuid.uuid4())
         
-        with self._build_lock:
+        # Use timeout to prevent deadlock - if lock is held for > 2s, raise error
+        lock_acquired = False
+        try:
+            lock_acquired = self._build_lock.acquire(timeout=2.0)
+            if not lock_acquired:
+                raise RuntimeError("Could not acquire build lock within 2 seconds. Another build may be in progress.")
+            
             if self.new_snapshot is not None:
                 raise RuntimeError("Build already in progress")
             
