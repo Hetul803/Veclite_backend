@@ -89,13 +89,18 @@ class SnapshotManager:
         # Use timeout to prevent deadlock - if lock is held for > 2s, raise error
         lock_acquired = False
         try:
+            print(f"DEBUG: start_build: Attempting to acquire _build_lock...")
             lock_acquired = self._build_lock.acquire(timeout=2.0)
             if not lock_acquired:
+                print("DEBUG: start_build: Failed to acquire lock within 2s")
                 raise RuntimeError("Could not acquire build lock within 2 seconds. Another build may be in progress.")
             
+            print(f"DEBUG: start_build: Lock acquired, checking if build in progress...")
             if self.new_snapshot is not None:
+                print("DEBUG: start_build: Build already in progress, raising error")
                 raise RuntimeError("Build already in progress")
             
+            print(f"DEBUG: start_build: Creating new MCNLayer...")
             # Create new snapshot from write_buffer state
             self.new_snapshot = MCNLayer(
                 dim=self.dim,
@@ -103,9 +108,11 @@ class SnapshotManager:
                 **self.kwargs
             )
             
+            print(f"DEBUG: start_build: MCNLayer created, copying vectors...")
             # Copy all vectors from write_buffer to new_snapshot
             # (This is the "snapshot" - we'll finalize it separately)
             self._copy_write_buffer_to_snapshot(self.new_snapshot)
+            print(f"DEBUG: start_build: Vectors copied, creating build entry...")
             
             self.active_builds[build_id] = {
                 "status": "building",
