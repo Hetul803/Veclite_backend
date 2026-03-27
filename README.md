@@ -1,4 +1,4 @@
-# Memryx Backend
+# Veclite Backend
 
 Production-ready multi-tenant vector database backend with 12.71x compression and exact recall parity.
 
